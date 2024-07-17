@@ -3,7 +3,6 @@ package csv
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"github.com/gabriel-vasile/mimetype/internal/util"
 	"io"
 )
@@ -149,17 +148,6 @@ func newDetectState(delimiter byte, lineLimit int) *detectState {
 		lineLimit:    lineLimit,
 		recordFields: make(map[int]int),
 	}
-}
-
-func byteStr(ref *byte) string {
-	if ref == nil {
-		return "nil "
-	}
-	b := string(*ref)
-	if b == "\"" {
-		return ` "  `
-	}
-	return fmt.Sprintf("%4s", fmt.Sprintf("%q", b))
 }
 
 func (d *detectState) read(buf []byte, i, n int) int {

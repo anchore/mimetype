@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"github.com/gabriel-vasile/mimetype/internal/util"
 	"io"
+	"math/rand"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // svStdlib was the previous function used for CSV/TSV detection. It is currently
@@ -617,6 +621,85 @@ func FuzzDetect(f *testing.F) {
 				curr, prev, string(d))
 		}
 	})
+}
+
+func BenchmarkDetectVsSv(b *testing.B) {
+	contents := generateCSV()
+
+	for _, limit := range []uint32{0, 100, 1000} {
+		b.Run(fmt.Sprintf("svStdlib(limit=%d)", limit), func(b *testing.B) {
+			svStdlib([]byte(contents), ',', limit)
+		})
+
+		b.Run(fmt.Sprintf("Detect(limit=%d)", limit), func(b *testing.B) {
+			Detect([]byte(contents), ',', limit)
+		})
+	}
+}
+
+func generateCSV() string {
+	const (
+		numRows = 1500
+		numCols = 40
+	)
+
+	var sb strings.Builder
+
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	for i := 0; i < numRows; i++ {
+		row := make([]string, numCols)
+		for j := 0; j < numCols; j++ {
+			// randomly decide the content of the cell
+			switch r.Intn(4) {
+			case 0:
+				// a plain number
+				row[j] = strconv.Itoa(r.Intn(1000000000) - 5000000)
+			case 1:
+				// a plain string
+				row[j] = generateRandomString(r, false)
+			case 2:
+				// a string surrounded by quotes
+				row[j] = "\"" + generateRandomString(r, false) + "\""
+			case 3:
+				// a string with extra quotes
+				row[j] = generateRandomString(r, true)
+			}
+		}
+		sb.WriteString(strings.Join(row, ","))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func generateRandomString(r *rand.Rand, extraQuotes bool) string {
+	n := r.Intn(10) + 5 // Random string length between 5 and 15
+	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	result := make([]byte, n)
+	for i := range result {
+		result[i] = chars[r.Intn(len(chars))]
+	}
+
+	if extraQuotes {
+		insertQuotes(r, result)
+	}
+
+	return string(result)
+}
+
+func insertQuotes(r *rand.Rand, s []byte) {
+	pos1 := r.Intn(len(s) - 1)
+	pos2 := r.Intn(len(s) - 1)
+	if pos1 > pos2 {
+		pos1, pos2 = pos2, pos1
+	}
+	// escaped quote
+	s[pos1] = '"'
+	s[pos1+1] = '"'
+
+	// just a random quote
+	s[pos2] = '"'
 }
 
 func Test_prepSvReader(t *testing.T) {
