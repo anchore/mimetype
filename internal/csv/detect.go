@@ -37,9 +37,10 @@ type slidingWindow struct {
 	lookAhead  int
 	lookBehind int
 	buf        []byte
-	slide      []byte
-	lastByte   byte
+	window     []byte
 	firstIter  bool
+	start      int
+	end        int
 }
 
 func newSlidingWindow(reader io.Reader, bufSize, lookAhead, lookBehind int) *slidingWindow {
@@ -49,76 +50,228 @@ func newSlidingWindow(reader io.Reader, bufSize, lookAhead, lookBehind int) *sli
 	if lookBehind <= 0 {
 		lookBehind = 1
 	}
+
 	return &slidingWindow{
 		reader:     reader,
 		bufSize:    bufSize,
 		lookAhead:  lookAhead,
 		lookBehind: lookBehind,
 		buf:        make([]byte, bufSize),
-		slide:      make([]byte, 0, lookAhead+lookBehind),
+		window:     make([]byte, bufSize+lookAhead+lookBehind),
 		firstIter:  true,
+		start:      0,
+		end:        0,
 	}
 }
 
 func (sw *slidingWindow) Process(processFunc func(buf []byte, i, length int) int) error {
-
-	var lastOffset int
+	var offset int
 	for {
+		// Read into buffer
 		n, err := sw.reader.Read(sw.buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
+		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
 
-		var combinedBuf []byte
-		var i int
+		if n == 0 {
+			break
+		}
+
+		//sw.start -= offset
+
+		// Move the valid range to the start of the window if necessary
+		if sw.start > 0 {
+			copy(sw.window, sw.window[sw.start:sw.end])
+			sw.end -= sw.start
+			sw.start = 0
+		}
+
+		// Append the new read bytes to the sliding window
+		copy(sw.window[sw.end:], sw.buf[:n])
+		sw.end += n
+
+		// Process the combined buffer
+		i := sw.start
 		if sw.firstIter {
-			combinedBuf = append(combinedBuf, sw.slide...)
-			combinedBuf = append(combinedBuf, sw.buf[:n]...)
+			i = 0
 			sw.firstIter = false
 		} else {
-			combinedBuf = append([]byte{sw.lastByte}, sw.slide...)
-			combinedBuf = append(combinedBuf, sw.buf[:n]...)
-			i = 1
+			i = sw.lookBehind
 		}
 
-		before := i
-		for {
-			if i >= len(combinedBuf)-sw.lookAhead {
-				break
-			}
-			before = i
-			i = processFunc(combinedBuf, i, len(combinedBuf))
-			lastOffset = i - before
-			i++
+		//fmt.Printf("start...\n")
+		for ; i < sw.end-sw.lookAhead; i++ {
+			//fmt.Printf("  ")
+			offset = processFunc(sw.window, i, sw.end)
+			//fmt.Printf("offset=%d start=%d end=%d\n", offset, sw.start, sw.end)
+			i += offset
 		}
 
-		if len(combinedBuf) > sw.lookAhead {
+		sw.start = i - 1
 
-			sw.lastByte = combinedBuf[before+lastOffset]
-			sw.slide = combinedBuf[before+lastOffset+1:]
-
-		} else {
-			sw.slide = combinedBuf[lastOffset:]
+		// Check if we are done reading
+		if errors.Is(err, io.EOF) {
+			break
 		}
 	}
 
-	if len(sw.slide) > 0 {
-		finalBuf := append([]byte{sw.lastByte}, sw.slide...)
-		i := sw.lookBehind
-		for {
-			if i >= len(finalBuf) {
-				break
-			}
-			i = processFunc(finalBuf, i, len(finalBuf))
-			i++
-		}
+	//fmt.Printf("offset=%d\n", offset)
+
+	sw.start += 1
+
+	// Process any remaining bytes in the sliding window
+	//if sw.end > sw.start {
+	for i := sw.start; i < sw.end; i++ {
+		//fmt.Printf("* ")
+		offset = processFunc(sw.window, i, sw.end)
+		//fmt.Printf("offset=%d start=%d end=%d\n", offset, sw.start, sw.end)
+		i += offset
 	}
+	//}
 
 	return nil
 }
+
+//func (sw *slidingWindow) Process(processFunc func(buf []byte, i, length int) int) error {
+//	var offset int
+//	for {
+//		// read into buffer
+//		n, err := sw.reader.Read(sw.buf)
+//		if err != nil && !errors.Is(err, io.EOF) {
+//			return err
+//		}
+//
+//		// move the valid range to the start of the window if necessary
+//		if sw.start > 0 {
+//			copy(sw.window, sw.window[sw.start:sw.end])
+//			sw.end -= sw.start
+//			sw.start = 0
+//		}
+//
+//		// append the new read bytes to the sliding window
+//		copy(sw.window[sw.end:], sw.buf[:n])
+//		sw.end += n
+//
+//		// process the combined buffer
+//		for i := sw.start; i < sw.end-sw.lookAhead; i++ {
+//			offset = processFunc(sw.window, i, sw.end)
+//			fmt.Printf("offset=%d\n", offset)
+//			i += offset
+//		}
+//
+//		sw.start = sw.end - sw.lookAhead
+//		//if sw.lookAhead <= sw.end {
+//		//	sw.start = sw.end - sw.lookAhead
+//		//} else {
+//		//	sw.start = 0
+//		//}
+//
+//		// check if we are done reading
+//		if errors.Is(err, io.EOF) {
+//			break
+//		}
+//	}
+//
+//	// process any remaining bytes in the sliding window
+//	if sw.end > sw.start {
+//		for i := sw.start; i < sw.end; i++ {
+//			offset = processFunc(sw.window, i, sw.end)
+//			fmt.Printf("offset=%d\n", offset)
+//			i += offset
+//		}
+//	}
+//
+//	return nil
+//}
+
+//type slidingWindow struct {
+//	reader     io.Reader
+//	bufSize    int
+//	lookAhead  int
+//	lookBehind int
+//	buf        []byte
+//	slide      []byte
+//	lastByte   byte
+//	firstIter  bool
+//}
+//
+//func newSlidingWindow(reader io.Reader, bufSize, lookAhead, lookBehind int) *slidingWindow {
+//	if lookAhead <= 0 {
+//		lookAhead = 3
+//	}
+//	if lookBehind <= 0 {
+//		lookBehind = 1
+//	}
+//	return &slidingWindow{
+//		reader:     reader,
+//		bufSize:    bufSize,
+//		lookAhead:  lookAhead,
+//		lookBehind: lookBehind,
+//		buf:        make([]byte, bufSize),
+//		slide:      make([]byte, 0, lookAhead+lookBehind),
+//		firstIter:  true,
+//	}
+//}
+//
+//func (sw *slidingWindow) Process(processFunc func(buf []byte, i, length int) int) error {
+//
+//	var lastOffset int
+//	for {
+//		n, err := sw.reader.Read(sw.buf)
+//		if err != nil {
+//			if errors.Is(err, io.EOF) {
+//				break
+//			}
+//			return err
+//		}
+//
+//		var combinedBuf []byte
+//		var i int
+//		if sw.firstIter {
+//			combinedBuf = append(combinedBuf, sw.slide...)
+//			combinedBuf = append(combinedBuf, sw.buf[:n]...)
+//			sw.firstIter = false
+//		} else {
+//			combinedBuf = append([]byte{sw.lastByte}, sw.slide...)
+//			combinedBuf = append(combinedBuf, sw.buf[:n]...)
+//			i = 1
+//		}
+//
+//		before := i
+//		for {
+//			if i >= len(combinedBuf)-sw.lookAhead {
+//				break
+//			}
+//			before = i
+//			i = processFunc(combinedBuf, i, len(combinedBuf))
+//			lastOffset = i - before
+//			i++
+//		}
+//
+//		if len(combinedBuf) > sw.lookAhead {
+//
+//			sw.lastByte = combinedBuf[before+lastOffset]
+//			sw.slide = combinedBuf[before+lastOffset+1:]
+//
+//		} else {
+//			sw.slide = combinedBuf[lastOffset:]
+//		}
+//	}
+//
+//	if len(sw.slide) > 0 {
+//		finalBuf := append([]byte{sw.lastByte}, sw.slide...)
+//		i := sw.lookBehind
+//		for {
+//			if i >= len(finalBuf) {
+//				break
+//			}
+//			i = processFunc(finalBuf, i, len(finalBuf))
+//			i++
+//		}
+//	}
+//
+//	return nil
+//}
 
 // Detect takes raw bytes and indicates if it is a CSV file (or other given value-delimited file). This reads up
 // to the given limit of bytes to make a determination, validating no further than the first 10 lines of the file.
@@ -129,7 +282,7 @@ func Detect(raw []byte, delimiter byte, limit uint32) bool {
 	}
 	reader := prepSvReader(raw, limit)
 	state := newDetectState(delimiter, lineLimit)
-	window := newSlidingWindow(reader, 1024, 3, 1)
+	window := newSlidingWindow(reader, 9, 3, 1)
 
 	if err := window.Process(state.read); err != nil {
 		panic("errg")
@@ -146,13 +299,29 @@ func newDetectState(delimiter byte, lineLimit int) *detectState {
 	return &detectState{
 		delimiter:    delimiter,
 		lineLimit:    lineLimit,
-		recordFields: make(map[int]int),
+		recordFields: make(map[int]int, lineLimit),
 	}
 }
 
+//func byteStr(b *byte) string {
+//	if b == nil {
+//		return " nil"
+//	}
+//
+//	if *b == '"' {
+//		return `  " `
+//	}
+//
+//	return fmt.Sprintf("%4s", fmt.Sprintf("%q", *b))
+//}
+
 func (d *detectState) read(buf []byte, i, n int) int {
 	if d.complete {
-		return i
+		return 0
+	}
+
+	if i < 0 {
+		return i * -1
 	}
 
 	d.cur = buf[i]
@@ -179,6 +348,8 @@ func (d *detectState) read(buf []byte, i, n int) int {
 			nextNext = nil
 		}
 
+		//fmt.Printf("%d/%d   d.prev: %s  d.cur: %s  d.next: %s  nextNext: %s  ...  ", i, n, byteStr(d.prev), byteStr(&d.cur), byteStr(d.next), byteStr(nextNext))
+
 		isNextLinuxNewline := isByte(d.next, '\n') && !isByte(nextNext, '\r')
 		isNextWindowsNewline := isByte(d.next, '\r') && isByte(nextNext, '\n')
 		isNextDelimiter := isByte(d.next, d.delimiter)
@@ -192,17 +363,17 @@ func (d *detectState) read(buf []byte, i, n int) int {
 	// edge case from stdlib csv reader: drop trailing carriage returns
 	if d.cur == '\r' && isByte(d.prev, '\n') && isNoNext {
 		// skip processing the trailing carriage return
-		return i
+		return 0
 	}
 
 	if !d.isNewline {
 		d.lineSize++
 	} else {
-		if isWindowsNewline {
-			i++ // don't process \n if we're on the \r
-		}
 		d.handleNewline()
-		return i
+		if isWindowsNewline {
+			return 1 // don't process \n if we're on the \r
+		}
+		return 0
 	}
 
 	return d.processLineChar(i)
@@ -240,17 +411,17 @@ func (d *detectState) handleNewline() {
 func (d *detectState) processLineChar(i int) int {
 	switch {
 	case d.cur == quote:
-		i = d.handleQuote(i)
+		return d.handleQuote(i)
 
 	case !d.isWithinComment:
 		d.handleDataCharacter()
 	}
-	return i
+	return 0
 }
 
 func (d *detectState) handleQuote(i int) int {
 	if d.isWithinComment {
-		return i
+		return 0
 	}
 
 	d.startDataLine()
@@ -260,8 +431,8 @@ func (d *detectState) handleQuote(i int) int {
 		switch {
 		case isByte(d.next, quote):
 			// ... NOPE, this is an escape for the next quote
-			i++ // skip processing the next quote character altogether
-			return i
+			// skip processing the next quote character altogether
+			return 1
 		default:
 			if d.nextIsFieldTerminator {
 				// we're ending the quote
@@ -271,7 +442,7 @@ func (d *detectState) handleQuote(i int) int {
 				// this doesn't appear to be the end of a field... so we'll treat it as if this current
 				// quote was escaped
 				//d.quoteCount++ // count the discovered quote
-				return i
+				return 0
 			}
 
 		}
@@ -299,7 +470,7 @@ func (d *detectState) handleQuote(i int) int {
 	//}
 
 	if d.isWithinExplicitQuote || d.isWithinInferredQuote {
-		return i
+		return 0
 	}
 
 	// quotes should either encapsulate a field entirely or there be only a single quote within the field
@@ -308,9 +479,9 @@ func (d *detectState) handleQuote(i int) int {
 	default:
 		// we found a field that the quote encapsulation is not correct (e.g. ...,"something"else,... )
 		d.markInvalid()
-		return i
+		return 0
 	}
-	return i
+	return 0
 }
 
 func (d *detectState) markInvalid() {

@@ -123,9 +123,9 @@ func TestDetect(t *testing.T) {
 		{
 			name:      "csv multiple lines over limit",
 			delimiter: ',',
-			input:     "a,b,c\n1,2,3\n4,5,6",
-			limit:     1,
-			want:      false, // we're only allowed to read a single byte, this could never be a CSV
+			input:     "aaaaa,b,c\n1,2,3\n4,5,6",
+			limit:     3,
+			want:      false, // we're only allowed to read 3 bytes, this could never be a CSV
 			// the previous limit value was not being honored (all bytes were read from the reader instead of the limit)
 			skipStdlibCompare: true,
 		},
@@ -167,7 +167,7 @@ func TestDetect(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "all quotes missing newline",
+			name: "all quoted fields, missing trailing newline",
 			input: `"a","b","c"
 "1","2","3"`,
 			delimiter: ',',
@@ -517,7 +517,7 @@ a,b,c
 			want:      false,
 		},
 		{
-			name: "first line triple quotes are not",
+			name: "first line triple quotes are not ok",
 			input: `""",0
 0,0`,
 			delimiter: ',',
