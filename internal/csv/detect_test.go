@@ -546,14 +546,14 @@ a,b,c
 			want:      false,
 		},
 		{
-			name: "erg",
+			name: "different field count",
 			input: `1,
 2,"""",3`,
 			delimiter: ',',
 			want:      false,
 		},
 		{
-			name:      "erg",
+			name:      "detect linux vs windows line endings correctly",
 			input:     "0,0,\"\"\n\r,0,",
 			delimiter: ',',
 			want:      true,
@@ -611,10 +611,7 @@ func FuzzDetect(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, d []byte) {
-		//if strings.Contains(string(d), "\"\"") {
-		//	return
-		//}
-
+		// we don't read the entire file, so we can't compare with the stdlib
 		if strings.Count(string(d), "\n") >= svLineLimit {
 			// we no longer check the entire CSV
 			return
@@ -632,7 +629,7 @@ func FuzzDetect(f *testing.F) {
 func BenchmarkDetectVsSv(b *testing.B) {
 	contents := generateCSV()
 
-	for _, limit := range []uint32{0, 100, 1000} {
+	for _, limit := range []uint32{0, 100, 500, 1000, 2000, 3000, 4000} {
 		b.Run(fmt.Sprintf("svStdlib(limit=%d)", limit), func(b *testing.B) {
 			svStdlib([]byte(contents), ',', limit)
 		})
@@ -695,17 +692,11 @@ func generateRandomString(r *rand.Rand, extraQuotes bool) string {
 }
 
 func insertQuotes(r *rand.Rand, s []byte) {
-	pos1 := r.Intn(len(s) - 1)
-	pos2 := r.Intn(len(s) - 1)
-	if pos1 > pos2 {
-		pos1, pos2 = pos2, pos1
-	}
-	// escaped quote
-	s[pos1] = '"'
-	s[pos1+1] = '"'
+	pos1 := r.Intn(len(s) - 3)
 
-	// just a random quote
-	s[pos2] = '"'
+	// escaped quote
+	s[pos1+1] = '"'
+	s[pos1+2] = '"'
 }
 
 func Test_prepSvReader(t *testing.T) {

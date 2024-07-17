@@ -2,8 +2,6 @@ package csv
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 	"github.com/gabriel-vasile/mimetype/internal/util"
 	"io"
 )
@@ -32,119 +30,18 @@ type detectState struct {
 	invalid  bool
 }
 
-type slidingWindow struct {
-	reader     io.Reader
-	bufSize    int
-	lookAhead  int
-	lookBehind int
-	buf        []byte
-	window     []byte
-	firstIter  bool
-	start      int
-	end        int
-}
-
-func newSlidingWindow(reader io.Reader, bufSize, lookAhead, lookBehind int) *slidingWindow {
-	if lookAhead <= 0 {
-		lookAhead = 3
-	}
-	if lookBehind <= 0 {
-		lookBehind = 1
-	}
-
-	return &slidingWindow{
-		reader:     reader,
-		bufSize:    bufSize,
-		lookAhead:  lookAhead,
-		lookBehind: lookBehind,
-		buf:        make([]byte, bufSize),
-		window:     make([]byte, bufSize+lookAhead+lookBehind),
-		firstIter:  true,
-		start:      0,
-		end:        0,
-	}
-}
-
-func (sw *slidingWindow) Process(processFunc func(buf []byte, i, length int) int) error {
-	var offset int
-	for {
-		// Read into buffer
-		n, err := sw.reader.Read(sw.buf)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return err
-		}
-
-		if n == 0 {
-			break
-		}
-
-		// Move the valid range to the start of the window if necessary
-		if sw.start > 0 {
-			copy(sw.window, sw.window[sw.start:sw.end])
-			sw.end -= sw.start
-			sw.start = 0
-		}
-
-		// Append the new read bytes to the sliding window
-		copy(sw.window[sw.end:], sw.buf[:n])
-		sw.end += n
-
-		// Process the combined buffer
-		i := sw.start
-		if sw.firstIter {
-			i = 0
-			sw.firstIter = false
-		} else {
-			i = sw.lookBehind
-		}
-
-		//fmt.Printf("start...\n")
-		for ; i < sw.end-sw.lookAhead; i++ {
-			//fmt.Printf("  ")
-			offset = processFunc(sw.window, i, sw.end)
-			//fmt.Printf("offset=%d start=%d end=%d\n", offset, sw.start, sw.end)
-			i += offset
-		}
-
-		sw.start = i - 1
-
-		// Check if we are done reading
-		if errors.Is(err, io.EOF) {
-			break
-		}
-	}
-
-	//fmt.Printf("offset=%d\n", offset)
-
-	sw.start += 1
-
-	// Process any remaining bytes in the sliding window
-	//if sw.end > sw.start {
-	for i := sw.start; i < sw.end; i++ {
-		//fmt.Printf("* ")
-		offset = processFunc(sw.window, i, sw.end)
-		//fmt.Printf("offset=%d start=%d end=%d\n", offset, sw.start, sw.end)
-		i += offset
-	}
-	//}
-
-	return nil
-}
-
 // Detect takes raw bytes and indicates if it is a CSV file (or other given value-delimited file). This reads up
 // to the given limit of bytes to make a determination, validating no further than the first 10 lines of the file.
 func Detect(raw []byte, delimiter byte, limit uint32) bool {
-	//return svStdlib(raw, rune(delimiter), limit)
 	lineLimit := svLineLimit
 	if limit > 0 {
 		lineLimit = -1
 	}
 	reader := prepSvReader(raw, limit)
 	state := newDetectState(delimiter, lineLimit)
-	window := newSlidingWindow(reader, 1024, 3, 1)
+	buffer := newSlidingBuffer(reader, 1024, 3, 1)
 
-	if err := window.Process(state.read); err != nil {
-		panic("errg")
+	if err := buffer.iterate(state.read); err != nil {
 		return false
 	}
 
@@ -162,25 +59,13 @@ func newDetectState(delimiter byte, lineLimit int) *detectState {
 	}
 }
 
-func byteStr(b *byte) string {
-	if b == nil {
-		return " nil"
-	}
-
-	if *b == '"' {
-		return `  " `
-	}
-
-	return fmt.Sprintf("%4s", fmt.Sprintf("%q", *b))
-}
-
-func (d *detectState) read(buf []byte, i, n int) int {
+func (d *detectState) read(buf []byte, i, n int) (int, error) {
 	if d.complete {
-		return 0
+		return 0, io.EOF
 	}
 
 	if i < 0 {
-		return i * -1
+		return i * -1, nil
 	}
 
 	d.cur = buf[i]
@@ -207,8 +92,6 @@ func (d *detectState) read(buf []byte, i, n int) int {
 			nextNext = nil
 		}
 
-		//fmt.Printf("%d/%d   d.prev: %s  d.cur: %s  d.next: %s  nextNext: %s  ...  ", i, n, byteStr(d.prev), byteStr(&d.cur), byteStr(d.next), byteStr(nextNext))
-
 		isNextLinuxNewline := d.cur != '\r' && isByte(d.next, '\n')
 		isNextWindowsNewline := isByte(d.next, '\r') && isByte(nextNext, '\n')
 		isNextDelimiter := isByte(d.next, d.delimiter)
@@ -222,7 +105,7 @@ func (d *detectState) read(buf []byte, i, n int) int {
 	// edge case from stdlib csv reader: drop trailing carriage returns
 	if d.cur == '\r' && isByte(d.prev, '\n') && isNoNext {
 		// skip processing the trailing carriage return
-		return 0
+		return 0, nil
 	}
 
 	if !d.isNewline {
@@ -230,12 +113,12 @@ func (d *detectState) read(buf []byte, i, n int) int {
 	} else {
 		d.handleNewline()
 		if isWindowsNewline {
-			return 1 // don't process \n if we're on the \r
+			return 1, nil // don't process \n if we're on the \r
 		}
-		return 0
+		return 0, nil
 	}
 
-	return d.processLineChar(i)
+	return d.processLineChar(i), nil
 }
 
 func isByte(b *byte, c byte) bool {
