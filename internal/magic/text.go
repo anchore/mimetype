@@ -2,6 +2,7 @@ package magic
 
 import (
 	"bytes"
+	"github.com/gabriel-vasile/mimetype/internal/util"
 	"strings"
 	"time"
 
@@ -233,7 +234,7 @@ func GeoJSON(raw []byte, limit uint32) bool {
 // types.
 func NdJSON(raw []byte, limit uint32) bool {
 	lCount, hasObjOrArr := 0, false
-	raw = dropLastLine(raw, limit)
+	raw = util.DropLastLine(raw, limit)
 	var l []byte
 	for len(raw) != 0 {
 		l, raw = scanLine(raw)
