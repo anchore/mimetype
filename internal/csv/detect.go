@@ -3,6 +3,7 @@ package csv
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/gabriel-vasile/mimetype/internal/util"
 	"io"
 )
@@ -282,7 +283,7 @@ func Detect(raw []byte, delimiter byte, limit uint32) bool {
 	}
 	reader := prepSvReader(raw, limit)
 	state := newDetectState(delimiter, lineLimit)
-	window := newSlidingWindow(reader, 9, 3, 1)
+	window := newSlidingWindow(reader, 1024, 3, 1)
 
 	if err := window.Process(state.read); err != nil {
 		panic("errg")
@@ -303,17 +304,17 @@ func newDetectState(delimiter byte, lineLimit int) *detectState {
 	}
 }
 
-//func byteStr(b *byte) string {
-//	if b == nil {
-//		return " nil"
-//	}
-//
-//	if *b == '"' {
-//		return `  " `
-//	}
-//
-//	return fmt.Sprintf("%4s", fmt.Sprintf("%q", *b))
-//}
+func byteStr(b *byte) string {
+	if b == nil {
+		return " nil"
+	}
+
+	if *b == '"' {
+		return `  " `
+	}
+
+	return fmt.Sprintf("%4s", fmt.Sprintf("%q", *b))
+}
 
 func (d *detectState) read(buf []byte, i, n int) int {
 	if d.complete {
@@ -350,7 +351,7 @@ func (d *detectState) read(buf []byte, i, n int) int {
 
 		//fmt.Printf("%d/%d   d.prev: %s  d.cur: %s  d.next: %s  nextNext: %s  ...  ", i, n, byteStr(d.prev), byteStr(&d.cur), byteStr(d.next), byteStr(nextNext))
 
-		isNextLinuxNewline := isByte(d.next, '\n') && !isByte(nextNext, '\r')
+		isNextLinuxNewline := d.cur != '\r' && isByte(d.next, '\n')
 		isNextWindowsNewline := isByte(d.next, '\r') && isByte(nextNext, '\n')
 		isNextDelimiter := isByte(d.next, d.delimiter)
 		d.nextIsFieldTerminator = isNextLinuxNewline || isNextWindowsNewline || isNextDelimiter || isNoNext
